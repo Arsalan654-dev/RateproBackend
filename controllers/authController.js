@@ -5,7 +5,6 @@ const jwt = require("jsonwebtoken");
 const sendEmail = require("../utils/sendEmail");
 const generateToken = require("../utils/generateToken");
 const cloudinary = require("../utils/cloudinary");
-const crypto = require("crypto");
 const moment = require("moment");
 
 // === Helper: Generate OTP Code ===
@@ -33,7 +32,7 @@ exports.registerUser = async (req, res, next) => {
             subject: "Verify Your Email",
             html: `
     <p>Hello ${name || "user"},</p>
-    <p>Your verification code is: <b>${otpCode}</b></p>
+    <p>Your verification code is: <b>${otpCode}</b></p> bchy 
     <p>Or click this link to verify directly: <a href="${link}">${link}</a></p>
     <p>This link/code will expire in ${process.env.OTP_EXPIRE_MINUTES} minute(s).</p>
   `
@@ -89,9 +88,16 @@ exports.verifyEmail = async (req, res, next) => {
     }
 };
 
+const allowedOtpPurposes = ["verify", "reset"];
+
+
 exports.resendOtp = async (req, res, next) => {
     try {
         const { email, purpose } = req.body;
+
+        if (!allowedOtpPurposes.includes(purpose)) {
+            return res.status(400).json({ message: "Invalid OTP purpose" });
+        }
 
         const user = await User.findOne({ email });
         if (!user) return res.status(404).json({ message: "User not found" });
@@ -138,7 +144,7 @@ exports.loginUser = async (req, res, next) => {
                 to: email,
                 subject: "Verify Your Email Again",
                 html: `
-      <p>Hello,</p>
+      <p>Hi,</p>
       <p>Your new OTP Code: <b>${otpCode}</b></p>
       <p>Or click here: <a href="${link}">${link}</a></p>
     `
@@ -218,21 +224,31 @@ exports.updateProfile = async (req, res, next) => {
 
         const { name, currentPassword, newPassword } = req.body;
 
+        // Avatar update ke liye alag try-catch
         if (req.file) {
-            if (user.avatar?.public_id)
-                await cloudinary.uploader.destroy(user.avatar.public_id);
+            try {
+                if (user.avatar?.public_id)
+                    await cloudinary.uploader.destroy(user.avatar.public_id);
 
-            const result = await cloudinary.uploader.upload(req.file.path, {
-                folder: "avatars",
-            });
+                const result = await cloudinary.uploader.upload(req.file.path, {
+                    folder: "avatars",
+                });
 
-            user.avatar = {
-                public_id: result.public_id,
-                url: result.secure_url,
-            };
+                user.avatar = {
+                    public_id: result.public_id,
+                    url: result.secure_url,
+                };
+            } catch (avatarErr) {
+                return res.status(500).json({ message: "Avatar update failed" });
+            }
         }
 
         if (name) user.name = name;
+
+        // Password update ki validation
+        if ((currentPassword && !newPassword) || (!currentPassword && newPassword)) {
+            return res.status(400).json({ message: "Please enter your current password and new password also" });
+        }
 
         if (currentPassword && newPassword) {
             const match = await bcrypt.compare(currentPassword, user.password);
@@ -242,12 +258,18 @@ exports.updateProfile = async (req, res, next) => {
         }
 
         await user.save();
-        res.status(200).json({ message: "Profile updated", user });
+
+        // Password ko response se hatao
+        const userObj = user.toObject();
+        delete userObj.password;
+
+        res.status(200).json({ message: "Profile updated", user: userObj });
 
     } catch (err) {
         next(err);
     }
 };
+
 
 exports.logoutUser = (req, res) => {
     res.clearCookie("refreshToken");

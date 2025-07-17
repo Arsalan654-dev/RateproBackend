@@ -24,7 +24,7 @@ exports.createUser = async (req, res, next) => {
       company: req.user.role === "company" ? req.user._id : undefined,
     });
 
-    res.status(201).json({ message: "User created", user });
+res.status(201).json({ message: "User created", user: { ...user.toObject(), password: undefined } });
   } catch (err) {
     next(err);
   }
@@ -38,19 +38,22 @@ exports.updateUser = async (req, res, next) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     if (req.file) {
-      if (user.avatar?.public_id)
-        await cloudinary.uploader.destroy(user.avatar.public_id);
+      try {
+        if (user.avatar?.public_id)
+          await cloudinary.uploader.destroy(user.avatar.public_id);
 
-      const uploaded = await cloudinary.uploader.upload(req.file.path, {
-        folder: "avatars",
-      });
+        const uploaded = await cloudinary.uploader.upload(req.file.path, {
+          folder: "avatars",
+        });
 
-      user.avatar = {
-        public_id: uploaded.public_id,
-        url: uploaded.secure_url,
-      };
+        user.avatar = {
+          public_id: uploaded.public_id,
+          url: uploaded.secure_url,
+        };
+      } catch (avatarErr) {
+        return res.status(500).json({ message: "Avatar update failed" });
+      }
     }
-
     if (name) user.name = name;
     if (role) user.role = role;
 
@@ -64,6 +67,8 @@ exports.updateUser = async (req, res, next) => {
 // === DELETE USER (soft delete) ===
 exports.deleteUser = async (req, res, next) => {
   try {
+    const user = await User.findById(req.params.id);
+    if (!user) return res.status(404).json({ message: "User not found" });
     await User.findByIdAndUpdate(req.params.id, { deleted: true });
     res.status(200).json({ message: "User deleted" });
   } catch (err) {
@@ -113,7 +118,8 @@ exports.getAllUsers = async (req, res, next) => {
     const users = await User.find(query)
       .sort({ [sort]: -1 })
       .skip((page - 1) * limit)
-      .limit(parseInt(limit));
+      .limit(parseInt(limit))
+      .select("-password"); // password field remove
 
     res.status(200).json({ total, page, users });
   } catch (err) {
@@ -139,7 +145,7 @@ exports.exportUserDataPDF = async (req, res, next) => {
     if (!user) return res.status(404).json({ message: "User not found" });
 
     const doc = new PDFDocument();
-    const filePath = `./uploads/user-${user._id}.pdf`;
+const filePath = `./uploads/user-${user._id}-${Date.now()}.pdf`;
     const stream = fs.createWriteStream(filePath);
     doc.pipe(stream);
 
@@ -152,9 +158,9 @@ exports.exportUserDataPDF = async (req, res, next) => {
     doc.text(`Verified: ${user.isVerified}`);
     doc.moveDown();
     doc.fontSize(16).text("Survey Stats:");
-    doc.text(`Total Surveys Taken: ${user.surveyStats.totalSurveysTaken}`);
-    doc.text(`Total Responses: ${user.surveyStats.totalResponses}`);
-    doc.text(`Average Score: ${user.surveyStats.averageScore}`);
+    doc.text(`Total Surveys Taken: ${user.surveyStats?.totalSurveysTaken || 0}`);
+    doc.text(`Total Responses: ${user.surveyStats?.totalResponses || 0}`);
+    doc.text(`Average Score: ${user.surveyStats?.averageScore || 0}`);
 
     doc.end();
 
